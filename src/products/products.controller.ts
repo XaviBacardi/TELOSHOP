@@ -21,6 +21,12 @@ export class ProductsController {
     return this.productsService.findAll(paginationDto);
   }
 
+  @Get('verificar')
+  notInclude(){
+    return this.productsService.notInclude()
+  } 
+
+
   @Get(':term')
   findOne(@Param('term') term: string) {
     return this.productsService.findOne(term);

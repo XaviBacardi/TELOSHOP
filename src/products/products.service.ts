@@ -1,10 +1,10 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PaginationDto } from 'src/common/dtos/pagination.dto';
-import { Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
-import { Product } from './entities/product.entity';
+import { Product, ProductImage } from './entities';
 
 import { validate as isUUID} from 'uuid';
 @Injectable()
@@ -15,7 +15,10 @@ private readonly logger = new Logger('ProductService')
 
 constructor(
   @InjectRepository(Product)
-  private readonly _productRepository: Repository<Product>
+  private readonly _productRepository: Repository<Product>,
+
+  @InjectRepository(ProductImage)
+  private readonly _productImageRepository: Repository<ProductImage>
 ){
 
 }
@@ -24,10 +27,17 @@ constructor(
 async create(createProductDto: CreateProductDto) {
 
     try {
-      const product =  this._productRepository.create(createProductDto);
+
+      //el resto de las propiedades se van a almacenar el productDetails solo sacamos la colección de imágenes
+      const {images = [], ...productDetails} = createProductDto;
+
+      const product =  this._productRepository.create({
+        ...productDetails,
+        images: images.map( image => this._productImageRepository.create({url: image}))
+      });
       await this._productRepository.save(product);
 
-      return product;
+      return {...product, images};
     } catch (error) {
       this.handleExceptions(error);
     }
@@ -80,7 +90,8 @@ async create(createProductDto: CreateProductDto) {
 
     const product = await this._productRepository.preload({
       id: id,
-      ...updateProductDto
+      ...updateProductDto,
+      images: []
     });
 
     if(!product) throw new NotFoundException(`Product whit ${id} not found!!`)
@@ -100,6 +111,29 @@ async create(createProductDto: CreateProductDto) {
     await this._productRepository.remove(productDelete);
   }
 
+
+  async notInclude(){
+
+   const qb = await this._productRepository.createQueryBuilder('products');
+
+   try {
+    const prods = qb
+    .where("products.id NOT IN" + qb.subQuery()
+      .select("image.productId")
+      .from(ProductImage, "image")
+      .getQuery()
+    )
+    .getMany()
+
+
+    return prods;
+   } catch (error) {
+      this.handleExceptions(error)
+   }
+   
+    
+
+  }
 
   private handleExceptions(error: any){
     if(error.code === '23505'){
