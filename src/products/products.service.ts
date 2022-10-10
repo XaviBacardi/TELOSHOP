@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, InternalServerErrorException, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { PaginationDto } from 'src/common/dtos/pagination.dto';
-import { In, Not, Repository } from 'typeorm';
+import { DataSource, In, Not, Repository } from 'typeorm';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { Product, ProductImage } from './entities';
@@ -18,7 +18,9 @@ constructor(
   private readonly _productRepository: Repository<Product>,
 
   @InjectRepository(ProductImage)
-  private readonly _productImageRepository: Repository<ProductImage>
+  private readonly _productImageRepository: Repository<ProductImage>,
+
+  private readonly dataSource: DataSource
 ){
 
 }
@@ -33,7 +35,9 @@ async create(createProductDto: CreateProductDto) {
 
       const product =  this._productRepository.create({
         ...productDetails,
-        images: images.map( image => this._productImageRepository.create({url: image}))
+        images: images.map( image => 
+          this._productImageRepository.create({url: image})
+        )
       });
       await this._productRepository.save(product);
 
@@ -51,11 +55,20 @@ async create(createProductDto: CreateProductDto) {
 
     const {limit = 10, offset = 0} = paginationDto;
 
-    return await this._productRepository.find({
+    const products = await this._productRepository.find({
+      relations: ['images'],
       take: limit,//tomar los elementos que indique el límite
       skip: offset //saltarse todos los elementos del offset
-      //TODO: Relaciones
     });
+
+
+    //barriendo cada uno de los productos
+    return products.map( (product) => ({
+
+      //Spread para adjuntar a cada producto el barrido de las imágenes
+      ...product,
+      images: product.images.map( (image) => image.url)
+    }))
   }
 
   async findOne(term: string) {
@@ -66,12 +79,13 @@ async create(createProductDto: CreateProductDto) {
     if( isUUID(term)){
       product = await this._productRepository.findOneBy({id: term})
     }else{
-      const queryBuilder = this._productRepository.createQueryBuilder();
+      const queryBuilder = this._productRepository.createQueryBuilder('prod');
       product = await queryBuilder
       .where(`UPPER(title) = :title or slug = :slug`, {
         title: term.toUpperCase(),
         slug: term.toLowerCase(),
       })
+      .leftJoinAndSelect('prod.images', 'img')
       .getOne();
       
     }
@@ -82,25 +96,61 @@ async create(createProductDto: CreateProductDto) {
     return product; 
   }
 
+  //Retornar las imagenes aplanadas al buscar un producto especifico
+  async findByPlane(termino: string){
+    const {images, ...resto} = await this.findOne( termino );
+    
+    return {
+      ...resto,
+      images: images.map( (img) => img.url)
+    }
+  }
+
   async findBySlug(slug: string){
     return await this._productRepository.findOne({where: {slug}})
   }
 
  async  update(id: string, updateProductDto: UpdateProductDto) {
 
-    const product = await this._productRepository.preload({
-      id: id,
-      ...updateProductDto,
-      images: []
-    });
+
+    const {images, ...toUpdate} = updateProductDto;
+
+    const product = await this._productRepository.preload({ id, ...toUpdate});
 
     if(!product) throw new NotFoundException(`Product whit ${id} not found!!`)
 
+    //Si hay imagenes debemos eliminarlas para actualizar las nuevas
+    /**CREATE QUERY RUNNER permite realizar diversas transacciones sql*/
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+
     try {
-       //esperar hasta que los cambios fueron salvados en la bdd antes de retornarlo
-      await  this._productRepository.save(product);
-      return product;
+
+      //si hay imagenes borramos las que existan
+      if( images ){
+        await queryRunner.manager.delete(ProductImage, {product: { id } })
+
+        product.images = images.map( 
+          (image) => this._productImageRepository.create({url: image}) 
+        )
+      }else{
+
+      }
+
+      await queryRunner.manager.save(product);
+
+      await queryRunner.commitTransaction();
+      await queryRunner.release();
+
+      //esperar hasta que los cambios fueron salvados en la bdd antes de retornarlo
+      //await  this._productRepository.save(product);
+      return this.findByPlane( id );
     } catch (error) {
+
+      await queryRunner.rollbackTransaction();
+      await queryRunner.release();
       this.handleExceptions(error);
     }
 
