@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Patch, Param, Delete, UploadedFile, UseInterceptors, BadRequestException, Res } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Response } from 'express';
 import { diskStorage } from 'multer';
@@ -11,7 +12,8 @@ import { fileNamer } from './helpers/file-namer.helper';
 export class FilesController {
 
     constructor(
-      private readonly filesService: FilesService
+      private readonly filesService: FilesService,
+      private configService: ConfigService
     ) {}
 
 
@@ -41,7 +43,7 @@ export class FilesController {
 
       if(!file) throw new BadRequestException(['Asegurate que el archivo es una imagen'])
       
-      const secureURL = `${file.filename}`
+      const secureURL = `${this.configService.get('HOST_API')}/files/product/${file.filename}`
       return {
         secureURL
       };
